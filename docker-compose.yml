@@ -1,0 +1,57 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: dew-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dew_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dew_secret_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-dew_platform}
+      TZ: ${TZ:-Asia/Seoul}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dew_user} -d ${POSTGRES_DB:-dew_platform}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./fastapi-app
+      dockerfile: Dockerfile
+    container_name: dew-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-dew_user}:${POSTGRES_PASSWORD:-dew_secret_pw}@db:5432/${POSTGRES_DB:-dew_platform}
+      TZ: ${TZ:-Asia/Seoul}
+    ports:
+      - "8000:8000"
+    # OCI / 호스트의 Antigravity 인증 세션 유지를 위한 볼륨 마운트 (선택적 사용)
+    # volumes:
+    #   - ~/.gemini:/root/.gemini
+
+  frontend:
+    build:
+      context: ./next-js-app
+      dockerfile: Dockerfile
+    container_name: dew-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      TZ: ${TZ:-Asia/Seoul}
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:
