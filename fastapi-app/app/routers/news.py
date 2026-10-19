@@ -57,7 +57,23 @@ def _match_user_vocabulary_in_news(
     return matched
 
 
+@router.get("/dates", response_model=List[date])
+def list_available_briefing_dates(
+    session: Session = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+) -> List[date]:
+    """DB에 보관 중인 주요뉴스 브리핑 날짜 목록을 최신순으로 반환합니다."""
+    _ = current_user
+    rows = session.exec(
+        select(DailyNews.briefing_date)
+        .distinct()
+        .order_by(DailyNews.briefing_date.desc())
+    ).all()
+    return list(rows)
+
+
 @router.get("/daily", response_model=List[DailyNewsItemResponse])
+
 def get_daily_news(
     target_date: Optional[date] = Query(
         default=None, description="조회할 브리핑 날짜 (미지정 시 가장 최근 브리핑 일자)"

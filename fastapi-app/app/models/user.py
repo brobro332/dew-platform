@@ -29,3 +29,10 @@ class UserProfileResponse(SQLModel):
     last_login_at: datetime
     word_count: int = 0
     scrap_count: int = 0
+
+
+class UserProfileUpdateRequest(SQLModel):
+    """PATCH /api/me 닉네임 변경 요청 DTO."""
+
+    nickname: str
+

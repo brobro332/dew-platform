@@ -92,6 +92,7 @@ dew-platform/
 - **내 단어장 형광펜 매칭**: `GET /api/news/daily` 호출 시 당일 뉴스 제목·요약·해설에 사용자가 단어사전에 등록해 둔 단어가 등장하면 `matched_words` 배열로 반환하여 프론트엔드에서 즉시 형광펜 하이라이트 및 뜻 툴팁을 표시할 수 있습니다.
 - **원클릭 단어사전 추가**: `POST /api/news/{news_id}/to-word` 호출 시 뉴스 출처 스냅샷(`source_news_title`, `source_news_url`)과 AI 보정 정의를 함께 단어사전에 즉시 저장합니다.
 - **Multi-User Safe TTL 스케줄러**: 매일 자정(`00:05 KST`) 어느 유저도 스크랩하지 않은(`NOT EXISTS`) 기한 경과 뉴스만 안전하게 정리합니다.
+- **주간 지식 리마인드 브리핑 (Weekly Care)**: 매주 금·일 저녁(`20:00 KST`) 최근 7일간 새로 수집한 단어와 스크랩 뉴스를 요약한 리마인드 Embed 카드를 각 유저의 디스코드 웹훅으로 자동 발송합니다.
 
 ---
 
@@ -101,21 +102,26 @@ dew-platform/
 | :---: | :---: | :--- | :--- |
 | **헬스체크** | `GET` | `/health` | 서버 상태, 버전 및 타임존(`Asia/Seoul`) 확인 |
 | **계정/프로필** | `GET` | `/api/me` | 현재 인증 유저 프로필 및 보유 단어·스크랩 수 조회 (최초 호출 시 자동 가입) |
+| **계정/프로필** | `PATCH` | `/api/me` | 현재 인증 유저의 표시 닉네임(`nickname`) 변경 |
 | **알림/설정** | `GET` | `/api/settings` | 내 관심 분야, 알림 시각, 디스코드 웹훅 설정 조회 |
 | **알림/설정** | `PUT` | `/api/settings` | 내 관심 분야, 알림 시각, 디스코드 웹훅 URL 수정 |
 | **알림/설정** | `POST` | `/api/notifications/test` | 내 디스코드 웹훅으로 테스트 브리핑 즉시 발송 |
+| **알림/설정** | `POST` | `/api/notifications/weekly-remind` | 최근 7일 수집 단어·스크랩 요약 주간 리마인드(Weekly Care) 즉시 발송 |
 | **단어사전** | `GET` | `/api/categories` | 내 단어장 카테고리 목록 및 카테고리별 단어 수 조회 |
 | **단어사전** | `POST` | `/api/categories` | 새 단어장 카테고리 생성 |
+| **단어사전** | `DELETE` | `/api/categories/{category_id}` | 단어장 카테고리 삭제 (소속 단어는 미분류로 보존) |
 | **단어사전** | `POST` | `/api/words/preview-ai` | 단어 등록 전 AI 내용 보정 미리보기 (메모 교정 + 한 줄 정의 + 예문 2개) |
 | **단어사전** | `POST` | `/api/words` | 단어 최종 저장 |
 | **단어사전** | `GET` | `/api/words` | 카테고리별 / 검색어별 / 숙지 여부별 단어 목록 조회 |
 | **단어사전** | `PATCH` | `/api/words/{word_id}` | 단어 내용 또는 숙지 완료(`is_memorized`) 상태 수정 |
 | **단어사전** | `DELETE` | `/api/words/{word_id}` | 단어 삭제 |
+| **주요뉴스** | `GET` | `/api/news/dates` | 수집 완료된 주요뉴스 브리핑 날짜 목록 조회 |
 | **주요뉴스** | `GET` | `/api/news/daily` | 날짜별·분야별 주요뉴스 조회 (스크랩 여부 + 내 단어 형광펜 매칭 포함) |
-| **주요뉴스** | `POST` | `/api/news/collect` | 공식 RSS 수집 및 AI 브리핑 생성 즉시 수동 실행 |
+| **주요뉴스** | `POST` | `/api/news/collect` | 공식 RSS 병렬 수집 및 AI 브리핑 생성 즉시 수동 실행 |
 | **주요뉴스** | `POST` | `/api/news/{news_id}/scrap` | 특정 뉴스 영구 보관함 스크랩 토글 및 한 줄 메모 저장 |
 | **주요뉴스** | `GET` | `/api/news/scraps` | 내가 영구 스크랩한 뉴스 보관함 목록 조회 |
 | **주요뉴스** | `POST` | `/api/news/{news_id}/to-word` | 뉴스 내 핵심 용어를 출처 스냅샷과 함께 내 단어사전에 원클릭 등록 |
+
 
 ---
 

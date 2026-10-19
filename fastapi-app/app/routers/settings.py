@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func
@@ -9,14 +9,16 @@ from app.core.config import settings
 from app.core.database import get_session
 from app.models.news import DailyNews, UserNewsScrap
 from app.models.setting import CareSetting, CareSettingUpdateRequest
-from app.models.user import AppUser, UserProfileResponse
+from app.models.user import AppUser, UserProfileResponse, UserProfileUpdateRequest
 from app.models.word import WordEntry
 from app.services.discord_notifier import (
     build_daily_briefing_payload,
+    build_weekly_care_reminder_payload,
     send_discord_webhook,
 )
 
 router = APIRouter(prefix="/api", tags=["Profile & Care Settings (계정 및 알림 설정)"])
+
 
 
 @router.get("/me", response_model=UserProfileResponse)
@@ -155,3 +157,84 @@ async def send_test_discord_notification(
             detail="디스코드 웹훅 발송에 실패했습니다. 웹훅 URL이 유효한지 확인해 주세요.",
         )
     return {"status": "sent", "target_date": str(target_date)}
+
+
+@router.patch("/me", response_model=UserProfileResponse)
+def update_my_profile(
+    payload: UserProfileUpdateRequest,
+    session: Session = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+) -> UserProfileResponse:
+    """현재 로그인 유저의 표시 닉네임(nickname)을 수정합니다."""
+    cleaned = payload.nickname.strip()
+    if not cleaned:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="닉네임을 입력해 주세요.",
+        )
+    current_user.nickname = cleaned[:100]
+    session.add(current_user)
+    session.commit()
+    session.refresh(current_user)
+    return get_my_profile(session=session, current_user=current_user)
+
+
+@router.post("/notifications/weekly-remind", response_model=Dict[str, object])
+async def send_weekly_remind_notification(
+    session: Session = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+) -> Dict[str, object]:
+    """
+    섹션 1.3 시너지 기능 3: 최근 7일간 새로 수집한 단어와 스크랩 뉴스를 요약한
+    '주간 지식 리마인드 브리핑(Weekly Care)' 카드를 내 디스코드로 즉시 발송합니다.
+    """
+    care_setting = session.exec(
+        select(CareSetting).where(CareSetting.user_id == current_user.id)
+    ).first()
+    if not care_setting or not care_setting.discord_webhook_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="먼저 설정에서 디스코드 웹훅 URL(discord_webhook_url)을 등록해 주세요.",
+        )
+
+    since_dt = datetime.now() - timedelta(days=7)
+    recent_words = list(
+        session.exec(
+            select(WordEntry)
+            .where(
+                WordEntry.user_id == current_user.id,
+                WordEntry.created_at >= since_dt,
+            )
+            .order_by(WordEntry.created_at.desc())
+        ).all()
+    )
+    recent_scraps = list(
+        session.exec(
+            select(DailyNews)
+            .join(UserNewsScrap, UserNewsScrap.news_id == DailyNews.id)
+            .where(
+                UserNewsScrap.user_id == current_user.id,
+                UserNewsScrap.created_at >= since_dt,
+            )
+            .order_by(UserNewsScrap.created_at.desc())
+        ).all()
+    )
+
+    payload = build_weekly_care_reminder_payload(
+        nickname=current_user.nickname,
+        recent_words=recent_words,
+        recent_scraps=recent_scraps,
+    )
+    ok = await send_discord_webhook(care_setting.discord_webhook_url, payload)
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="디스코드 주간 리마인드 웹훅 발송에 실패했습니다.",
+        )
+
+    return {
+        "status": "sent",
+        "recent_word_count": len(recent_words),
+        "recent_scrap_count": len(recent_scraps),
+    }
+

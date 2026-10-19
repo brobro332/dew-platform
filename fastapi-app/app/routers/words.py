@@ -95,6 +95,44 @@ def create_category(
     )
 
 
+@router.delete(
+    "/categories/{category_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_category(
+    category_id: int,
+    session: Session = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+) -> None:
+    """단어사전 카테고리를 삭제합니다 (소속 단어들의 category_id는 NULL로 안전하게 해제됩니다)."""
+    category = session.exec(
+        select(WordCategory).where(
+            WordCategory.id == category_id,
+            WordCategory.user_id == current_user.id,
+        )
+    ).first()
+    if not category:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="해당 카테고리를 찾을 수 없습니다.",
+        )
+
+    # 소속 단어의 category_id를 NULL로 해제 후 카테고리 삭제
+    words_in_cat = session.exec(
+        select(WordEntry).where(
+            WordEntry.user_id == current_user.id,
+            WordEntry.category_id == category_id,
+        )
+    ).all()
+    for w in words_in_cat:
+        w.category_id = None
+        session.add(w)
+
+    session.delete(category)
+    session.commit()
+
+
+
 @router.post("/words/preview-ai", response_model=WordPreviewResponse)
 async def preview_word_with_ai(
     payload: WordPreviewRequest,

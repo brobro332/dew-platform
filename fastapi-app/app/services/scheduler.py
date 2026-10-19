@@ -7,17 +7,21 @@ from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.core.database import engine
-from app.models.news import DailyNews
+from app.models.news import DailyNews, UserNewsScrap
 from app.models.setting import CareSetting
+from app.models.user import AppUser
+from app.models.word import WordEntry
 from app.services.ai_engine import generate_briefings_step2, select_top_news_step1
 from app.services.discord_notifier import (
     build_daily_briefing_payload,
+    build_weekly_care_reminder_payload,
     send_discord_webhook,
 )
 from app.services.rss_collector import (
     collect_rss_candidates,
     enrich_missing_summaries_with_naver,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +152,55 @@ async def dispatch_scheduled_discord_briefings() -> None:
             await send_discord_webhook(user_setting.discord_webhook_url, payload)
 
 
+async def dispatch_weekly_care_reminders() -> None:
+    """
+    섹션 1.3 시너지 기능 3: 주간 지식 리마인드 브리핑 (Weekly Care)
+    매주 금요일/일요일 저녁, 최근 7일간 새로 수집한 단어와 스크랩 뉴스를 요약해 디스코드로 발송합니다.
+    """
+    since_dt = datetime.now() - timedelta(days=7)
+
+    with Session(engine) as session:
+        enabled_settings = session.exec(
+            select(CareSetting).where(
+                CareSetting.is_active == True,  # noqa: E712
+                CareSetting.weekly_remind_enabled == True,  # noqa: E712
+            )
+        ).all()
+
+        for user_setting in enabled_settings:
+            if not user_setting.discord_webhook_url:
+                continue
+            user = session.get(AppUser, user_setting.user_id)
+            nickname = user.nickname if user else "Dew 케어러"
+
+            recent_words = list(
+                session.exec(
+                    select(WordEntry)
+                    .where(
+                        WordEntry.user_id == user_setting.user_id,
+                        WordEntry.created_at >= since_dt,
+                    )
+                    .order_by(WordEntry.created_at.desc())
+                ).all()
+            )
+            recent_scrap_rows = session.exec(
+                select(DailyNews)
+                .join(UserNewsScrap, UserNewsScrap.news_id == DailyNews.id)
+                .where(
+                    UserNewsScrap.user_id == user_setting.user_id,
+                    UserNewsScrap.created_at >= since_dt,
+                )
+                .order_by(UserNewsScrap.created_at.desc())
+            ).all()
+
+            payload = build_weekly_care_reminder_payload(
+                nickname=nickname,
+                recent_words=recent_words,
+                recent_scraps=list(recent_scrap_rows),
+            )
+            await send_discord_webhook(user_setting.discord_webhook_url, payload)
+
+
 def start_scheduler() -> None:
     """FastAPI Lifespan 시작 시 백그라운드 스케줄러를 구동합니다."""
     if scheduler.running:
@@ -182,8 +235,20 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
 
+    # 4. 매주 금/일 20:00 KST 주간 지식 리마인드 브리핑 발송 (Weekly Care)
+    scheduler.add_job(
+        dispatch_weekly_care_reminders,
+        trigger="cron",
+        day_of_week="fri,sun",
+        hour=20,
+        minute=0,
+        id="weekly_care_reminder",
+        replace_existing=True,
+    )
+
     scheduler.start()
     logger.info("APScheduler started (timezone=%s).", settings.TZ)
+
 
 
 def shutdown_scheduler() -> None:

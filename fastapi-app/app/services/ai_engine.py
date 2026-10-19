@@ -234,23 +234,57 @@ async def generate_briefings_step2(
     except Exception as exc:
         logger.info("Step 2 AI briefing using local structured fallback (%s)", exc)
 
-    # 누락된 항목에 대한 안전한 기본 해설 채움
+    # 누락된 항목에 대한 안전한 기본 해설 및 핵심 용어 자동 추출 채움
     for cat, item in selected_items:
         if item.candidate_id not in result_map:
             summary_line = item.summary_raw or item.title
+            fallback_terms = _extract_fallback_terms(cat, item.title, summary_line)
             result_map[item.candidate_id] = {
                 "ai_briefing": {
                     "three_line_summary": [
                         f"[{cat}] {item.title}",
-                        summary_line[:80] if summary_line else "핵심 내용이 요약된 주요 뉴스입니다.",
-                        "원문 링크를 통해 세부 배경과 후속 동향을 확인할 수 있습니다.",
+                        summary_line[:110]
+                        if summary_line and summary_line != item.title
+                        else f"{item.press_name}에서 보도한 {cat} 분야 핵심 이슈입니다.",
+                        "원문 기사를 통해 세부 수치와 향후 정책·시장 일정을 확인할 수 있습니다.",
                     ],
-                    "so_what": f"{cat} 분야의 주요 흐름을 파악하고 내 일상과 의사결정에 참고해 보세요.",
+                    "so_what": f"{cat} 분야의 주요 흐름을 파악하고 내 일상·자산·커리어 의사결정에 참고해 보세요.",
                 },
-                "extracted_terms": [],
+                "extracted_terms": fallback_terms,
             }
 
     return result_map
+
+
+def _extract_fallback_terms(
+    category: str, title: str, summary: str
+) -> List[Dict[str, str]]:
+    """외부 LLM 미설정 시 기사 제목·요약에서 핵심 키워드를 추출해 원클릭 단어장 연동을 지원합니다."""
+    text = f"{title} {summary}"
+    tokens = re.findall(r"[가-힣A-Za-z0-9]{2,10}", text)
+    stopwords = {
+        "오늘", "내일", "올해", "내년", "정부", "기자", "뉴스", "관련", "위해", "대한",
+        "통해", "이번", "지난", "최대", "최소", "속보", "단독", "종합", "발표", "추진",
+    }
+    picked: List[str] = []
+    for tok in tokens:
+        if tok not in stopwords and not tok.isdigit() and len(tok) >= 2:
+            if tok not in picked:
+                picked.append(tok)
+            if len(picked) >= 2:
+                break
+
+    if not picked:
+        picked = [category.split("/")[0]]
+
+    return [
+        {
+            "term": term,
+            "definition": f"'{title[:28]}...' 기사에서 다루는 {category} 분야 핵심 키워드",
+        }
+        for term in picked
+    ]
+
 
 
 async def preview_word_refinement(

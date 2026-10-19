@@ -5,8 +5,10 @@ import httpx
 
 from app.core.config import settings
 from app.models.news import DailyNews
+from app.models.word import WordEntry
 
 logger = logging.getLogger(__name__)
+
 
 # 분야별 디스코드 Embed 색상 및 아이콘
 CATEGORY_STYLES: Dict[str, Dict[str, Any]] = {
@@ -102,3 +104,56 @@ async def send_discord_webhook(webhook_url: str, payload: Dict[str, Any]) -> boo
             "Discord webhook returned status %s: %s", resp.status_code, resp.text
         )
         return False
+
+
+def build_weekly_care_reminder_payload(
+    nickname: str,
+    recent_words: List[WordEntry],
+    recent_scraps: List[DailyNews],
+) -> Dict[str, Any]:
+    """
+    섹션 1.3 시너지 기능 3: 주간 지식 리마인드 브리핑 (Weekly Care)
+    이번 주에 새로 수집한 단어 N개와 스크랩한 뉴스 M건을 요약한 리마인드 카드를 생성합니다.
+    """
+    word_fields: List[Dict[str, Any]] = []
+    for w in recent_words[:5]:
+        desc = w.ai_refined_definition or w.user_definition or "등록된 핵심 개념"
+        word_fields.append(
+            {
+                "name": f"📕 {w.term}",
+                "value": desc[:200],
+                "inline": False,
+            }
+        )
+
+    scrap_fields: List[Dict[str, Any]] = []
+    for n in recent_scraps[:5]:
+        scrap_fields.append(
+            {
+                "name": f"📌 [{n.category}] {n.title[:80]}",
+                "value": f"🔗 [원문 다시 보기]({n.original_url})",
+                "inline": False,
+            }
+        )
+
+    embeds: List[Dict[str, Any]] = [
+        {
+            "title": "🌱 이번 주 나만의 지식 리마인드 (Weekly Care)",
+            "description": (
+                f"**{nickname}**님, 이번 주에 새로 수집한 단어 **{len(recent_words)}개**와 "
+                f"스크랩한 뉴스 **{len(recent_scraps)}건**이에요. 주말 동안 가볍게 복습해 볼까요?"
+            ),
+            "color": 1096065,
+            "fields": (word_fields + scrap_fields)[:10],
+            "footer": {
+                "text": "Dew Platform 단어사전에서 숙지 완료(✅) 체크로 내 지식을 완성해 보세요!"
+            },
+        }
+    ]
+
+    return {
+        "username": "Dew AI 케어 비서",
+        "content": f"🗓️ **{nickname}님의 주간 지식·인사이트 복습 리마인드가 도착했습니다!**",
+        "embeds": embeds,
+    }
+
