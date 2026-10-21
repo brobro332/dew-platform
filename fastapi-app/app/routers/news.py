@@ -15,10 +15,56 @@ from app.models.news import (
 )
 from app.models.user import AppUser
 from app.models.word import WordCategory, WordEntry
-from app.services.ai_engine import preview_word_refinement
+from app.services.ai_engine import (
+    _extract_fallback_terms,
+    _is_valid_keyword_candidate,
+    normalize_korean_term,
+    preview_word_refinement,
+)
 from app.services.scheduler import run_daily_news_pipeline
 
 router = APIRouter(prefix="/api/news", tags=["Daily News & Synergy (주요뉴스 & 연동)"])
+
+
+def _sanitize_extracted_terms(news: DailyNews) -> List[Dict[str, str]]:
+    """
+    기존 DB에 저장된 extracted_terms 중 조사/어미가 붙어 있거나('소리는')
+    단순 숫자·단위('12억원')인 항목을 명사 원형으로 정규화·재추출합니다.
+    """
+    raw_terms = news.extracted_terms or []
+    cleaned: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    stopwords = {
+        "오늘", "내일", "어제", "올해", "내년", "작년", "정부", "기자", "뉴스", "관련",
+        "위해", "대한", "통해", "이번", "지난", "최대", "최소", "속보", "단독", "종합",
+    }
+
+    for item in raw_terms:
+        if not isinstance(item, dict):
+            continue
+        raw_t = str(item.get("term") or "").strip()
+        norm_t = normalize_korean_term(raw_t)
+        if _is_valid_keyword_candidate(raw_t, norm_t, stopwords) and norm_t not in seen:
+            seen.add(norm_t)
+            cleaned.append(
+                {
+                    "term": norm_t,
+                    "definition": str(item.get("definition") or ""),
+                }
+            )
+
+    if len(cleaned) < 2:
+        fallback = _extract_fallback_terms(
+            news.category, news.title, news.summary_raw or news.title
+        )
+        for fb in fallback:
+            if fb["term"] not in seen:
+                seen.add(fb["term"])
+                cleaned.append(fb)
+            if len(cleaned) >= 2:
+                break
+
+    return cleaned
 
 
 def _match_user_vocabulary_in_news(
@@ -133,7 +179,7 @@ def get_daily_news(
                 thumbnail_url=n.thumbnail_url,
                 summary_raw=n.summary_raw,
                 ai_briefing=n.ai_briefing or {},
-                extracted_terms=n.extracted_terms or [],
+                extracted_terms=_sanitize_extracted_terms(n),
                 is_scrapped=scrap is not None,
                 user_memo=scrap.user_memo if scrap else None,
                 matched_words=_match_user_vocabulary_in_news(
@@ -148,15 +194,19 @@ def get_daily_news(
 
 @router.post("/collect", response_model=Dict[str, object])
 async def trigger_news_collection(
+    target_date: Optional[date] = Query(
+        default=None, description="수집·브리핑 생성 기준 일자 (미지정 시 오늘 날짜)"
+    ),
     current_user: AppUser = Depends(get_current_user),
 ) -> Dict[str, object]:
     """즉시 공식 RSS 뉴스 수집 및 2-Step AI 눈높이 브리핑 생성을 수동 트리거합니다."""
     _ = current_user
-    saved_items = await run_daily_news_pipeline()
+    effective_date = target_date or datetime.now().date()
+    saved_items = await run_daily_news_pipeline(target_date=effective_date)
     return {
         "status": "completed",
         "collected_count": len(saved_items),
-        "briefing_date": str(datetime.now().date()),
+        "briefing_date": str(effective_date),
     }
 
 
@@ -275,10 +325,38 @@ async def add_news_term_to_vocabulary(
         if first_cat:
             target_category_id = first_cat.id
 
+    clean_term = normalize_korean_term(payload.term) or payload.term.strip()
+
     ai_preview = await preview_word_refinement(
-        term=payload.term.strip(),
+        term=clean_term,
         user_definition=payload.user_memo or payload.definition,
     )
+
+    existing_word = session.exec(
+        select(WordEntry).where(
+            WordEntry.user_id == current_user.id,
+            WordEntry.term == clean_term,
+        )
+    ).first()
+
+    if existing_word:
+        existing_word.category_id = target_category_id
+        existing_word.source_news_id = news.id
+        existing_word.source_news_title = news.title
+        existing_word.source_news_url = news.original_url
+        existing_word.user_definition = payload.user_memo or payload.definition
+        existing_word.ai_refined_definition = ai_preview.ai_refined_definition
+        existing_word.ai_supplement = {
+            "one_line_definition": ai_preview.one_line_definition,
+            "corrected_user_memo": ai_preview.corrected_user_memo,
+            "examples": ai_preview.examples,
+            "related_keywords": ai_preview.related_keywords,
+            "opposite_keywords": ai_preview.opposite_keywords,
+        }
+        session.add(existing_word)
+        session.commit()
+        session.refresh(existing_word)
+        return existing_word
 
     word_entry = WordEntry(
         user_id=current_user.id,
@@ -286,7 +364,7 @@ async def add_news_term_to_vocabulary(
         source_news_id=news.id,
         source_news_title=news.title,
         source_news_url=news.original_url,
-        term=payload.term.strip(),
+        term=clean_term,
         user_definition=payload.user_memo or payload.definition,
         ai_refined_definition=ai_preview.ai_refined_definition,
         ai_supplement={

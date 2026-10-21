@@ -17,7 +17,7 @@ from app.models.word import (
     WordPreviewResponse,
     WordUpdateRequest,
 )
-from app.services.ai_engine import preview_word_refinement
+from app.services.ai_engine import normalize_korean_term, preview_word_refinement
 
 router = APIRouter(prefix="/api", tags=["Vocabulary Vault (나만의 단어사전)"])
 
@@ -174,13 +174,33 @@ def create_word(
                 detail="지정한 카테고리를 찾을 수 없습니다.",
             )
 
+    clean_term = normalize_korean_term(payload.term) or payload.term.strip()
+
+    existing_word = session.exec(
+        select(WordEntry).where(
+            WordEntry.user_id == current_user.id,
+            WordEntry.term == clean_term,
+        )
+    ).first()
+
+    if existing_word:
+        existing_word.category_id = payload.category_id
+        existing_word.user_definition = payload.user_definition
+        existing_word.ai_refined_definition = payload.ai_refined_definition
+        existing_word.ai_supplement = payload.ai_supplement or {}
+        existing_word.updated_at = datetime.now(timezone.utc)
+        session.add(existing_word)
+        session.commit()
+        session.refresh(existing_word)
+        return existing_word
+
     word = WordEntry(
         user_id=current_user.id,
         category_id=payload.category_id,
         source_news_id=payload.source_news_id,
         source_news_title=payload.source_news_title,
         source_news_url=payload.source_news_url,
-        term=payload.term.strip(),
+        term=clean_term,
         user_definition=payload.user_definition,
         ai_refined_definition=payload.ai_refined_definition,
         ai_supplement=payload.ai_supplement or {},
