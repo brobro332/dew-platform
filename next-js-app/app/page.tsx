@@ -57,11 +57,21 @@ export default function DailyNewsDashboardPage() {
       ]);
       setNewsList(newsData);
       setCategories(catData);
-      if (catData.length > 0 && selectedWordCategoryId === undefined) {
-        setSelectedWordCategoryId(catData[0].id);
+      if (catData.length > 0) {
+        setSelectedWordCategoryId((prev) =>
+          prev === undefined ? catData[0].id : prev
+        );
       }
-      if (!dateFilter && newsData.length > 0) {
+      if (dateFilter) {
+        setTargetDate(dateFilter);
+      } else if (newsData.length > 0) {
         setTargetDate(newsData[0].briefing_date);
+      } else {
+        const now = new Date();
+        const yyyy = now.getFullYear();
+        const mm = String(now.getMonth() + 1).padStart(2, "0");
+        const dd = String(now.getDate()).padStart(2, "0");
+        setTargetDate(`${yyyy}-${mm}-${dd}`);
       }
       const initialMemos: Record<number, string> = {};
       newsData.forEach((n) => {
@@ -77,7 +87,7 @@ export default function DailyNewsDashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedWordCategoryId]);
+  }, []);
 
   useEffect(() => {
     loadData();
@@ -87,12 +97,14 @@ export default function DailyNewsDashboardPage() {
     setCollecting(true);
     setErrorMsg(null);
     try {
-      const res = await triggerNewsCollection();
+      const requestedDate = targetDate || undefined;
+      const res = await triggerNewsCollection(requestedDate);
+      const effectiveDate = requestedDate || res.briefing_date;
       showToast(
-        `✅ 공식 RSS 수집 및 AI 눈높이 브리핑 생성 완료! (${res.collected_count}건)`
+        `✅ 공식 RSS 수집 및 AI 눈높이 브리핑 생성 완료! (${effectiveDate}, ${res.collected_count}건)`
       );
-      setTargetDate(res.briefing_date);
-      await loadData(res.briefing_date);
+      setTargetDate(effectiveDate);
+      await loadData(effectiveDate);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "뉴스 수집 중 오류가 발생했습니다.";

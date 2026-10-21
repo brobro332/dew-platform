@@ -171,14 +171,16 @@ export const fetchDailyNews = (params?: {
   return apiRequest<DailyNewsItem[]>(`/api/news/daily${qs ? `?${qs}` : ""}`);
 };
 
-export const triggerNewsCollection = () =>
-  apiRequest<{
+export const triggerNewsCollection = (targetDate?: string) => {
+  const qs = targetDate ? `?target_date=${encodeURIComponent(targetDate)}` : "";
+  return apiRequest<{
     status: string;
     collected_count: number;
     briefing_date: string;
-  }>("/api/news/collect", {
+  }>(`/api/news/collect${qs}`, {
     method: "POST",
   });
+};
 
 export const toggleNewsScrap = (newsId: number, userMemo?: string | null) =>
   apiRequest<{
